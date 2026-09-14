@@ -38,6 +38,11 @@ class Player {
             final category = message[2] as String;
             final detail = message[3] as String;
             final ev = MediaEvent(error, category, detail);
+            if (category == 'render.video' &&
+                detail == '1st_frame' &&
+                !_firstFrameRendered.isCompleted) {
+              _firstFrameRendered.complete();
+            }
             for (final cb in _eventCb) {
               cb(ev);
             }
@@ -166,6 +171,16 @@ class Player {
       return;
     }
     final tex = textureId.value;
+    if (tex != null && tex >= 0 && !_firstFrameRendered.isCompleted) {
+      // mdk attaches the surface asynchronously on its render thread (a job queued by
+      // RenderLoop::add). Detaching or destroying the player while that job is still
+      // pending crashes inside libmdk (ANativeWindow_getFormat on a null/destroyed window,
+      // or a freed list node). The "render.video"/"1st_frame" event is emitted once the
+      // first frame has been rendered to the surface, i.e. after the attach completed, so
+      // wait for it (bounded by [surfaceAttachTimeout]) before detaching.
+      await _firstFrameRendered.future
+          .timeout(surfaceAttachTimeout, onTimeout: () {});
+    }
     // await: ensure no player ref in fvp plugin before mdkPlayerAPI_delete() in dart.
     // Detach only (not updateTexture(width: -1), which also destroys the texture entry).
     if (tex != null && tex >= 0) {
@@ -796,6 +811,11 @@ class Player {
   Completer<Uint8List?>? _snapshot;
   Completer<int>? _seeked;
   final _receivePort = ReceivePort();
+
+  /// How long [dispose] waits for the first rendered frame before detaching the
+  /// surface when no frame has been rendered yet. See the comment in [dispose].
+  static Duration surfaceAttachTimeout = const Duration(seconds: 1);
+  final _firstFrameRendered = Completer<void>();
 
   final _eventCb = <Function(MediaEvent)>[];
   final _stateCb = <Function(PlaybackState oldValue, PlaybackState newValue)>[];
