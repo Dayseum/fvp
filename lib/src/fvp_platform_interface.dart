@@ -42,10 +42,9 @@ abstract class FvpPlatform extends PlatformInterface {
   }
 
   /// Release the texture entry detached by [releaseTexture]. Platforms whose
-  /// [releaseTexture] already releases the entry may ignore this call.
-  Future<void> destroyTexture(int textureId) {
-    throw UnimplementedError('destroyTexture() has not been implemented.');
-  }
+  /// [releaseTexture] already releases the entry may ignore this call, so the
+  /// default is a no-op to keep existing implementations working.
+  Future<void> destroyTexture(int textureId) async {}
 
   Future<void> setMixWithOthers(bool mixWithOthers) async {
     throw UnimplementedError('setMixWithOthers() has not been implemented.');

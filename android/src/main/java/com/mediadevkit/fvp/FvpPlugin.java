@@ -95,6 +95,10 @@ public class FvpPlugin implements FlutterPlugin, MethodCallHandler {
                   @Override
                   public void onSurfaceAvailable() {
                     Log.d("FvpPlugin", "SurfaceProducer.onSurfaceAvailable for textureId " + texId);
+                    // ReleaseRT removed the surfaces entry: the player is being destroyed, never re-attach it.
+                    if (surfaces == null || !surfaces.containsKey(texId)) {
+                      return;
+                    }
                     final Surface newSurface = sp.getSurface();
                     surfaces.put(texId, newSurface);
                     // will do nothing if same surface
@@ -104,6 +108,9 @@ public class FvpPlugin implements FlutterPlugin, MethodCallHandler {
                   @Override
                   public void onSurfaceCleanup() {
                     Log.d("FvpPlugin", "SurfaceProducer.onSurfaceCleanup for textureId " + texId);
+                    if (surfaces == null || !surfaces.containsKey(texId)) {
+                      return; // already detached by ReleaseRT
+                    }
                     // Keep the entry in `textures` so that DestroyRT can still release it later.
                     nativeSetSurface(handle, texId, null, 0, 0, tunnel);
                   }
@@ -158,10 +165,12 @@ public class FvpPlugin implements FlutterPlugin, MethodCallHandler {
   public void onDetachedFromEngine(@NonNull FlutterPluginBinding binding) {
     channel.setMethodCallHandler(null);
     Log.i("FvpPlugin", "onDetachedFromEngine: ");
-    // Dart code will not run anymore, so DestroyRT is never called for the remaining textures.
+    // The method channel is gone, so DestroyRT can no longer reach the remaining textures.
     // Release them here so that the ImageReader stops delivering frames: an in-flight
     // onImageAvailable after the engine detached would otherwise call scheduleFrame() on a
     // detached FlutterJNI ("Cannot execute operation because FlutterJNI is not attached to native").
+    // Known remaining race: an attach still pending on the mdk render thread at this point
+    // still sees the Surface die (the players are owned by dart and are not destroyed here).
     for (Map.Entry<Long, TextureEntry> e : textures.entrySet()) {
       nativeSetSurface(0, e.getKey(), null, -1, -1, false);
       e.getValue().release();

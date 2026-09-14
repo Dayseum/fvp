@@ -187,10 +187,13 @@ class Player {
     // render thread may still be attaching the surface detached by releaseTexture(); the
     // player destructor waits for it. Releasing the ImageReader earlier destroys the Surface
     // under the render thread (android). No-op on platforms whose ReleaseRT already released it.
-    if (tex != null && tex >= 0) {
-      await FvpPlatform.instance.destroyTexture(tex);
+    try {
+      if (tex != null && tex >= 0) {
+        await FvpPlatform.instance.destroyTexture(tex);
+      }
+    } finally {
+      textureId.dispose();
     }
-    textureId.dispose();
   }
 
   /// Release current texture then create a new one for current [media], and update [textureId].
@@ -202,10 +205,10 @@ class Player {
     if ((textureId.value ?? -1) >= 0) {
       final old = textureId.value!;
       await FvpPlatform.instance.releaseTexture(nativeHandle, old);
+      textureId.value = null;
       // The player stays alive here, so nothing waits for the render thread. Keep the previous
       // behavior (release immediately) for texture re-creation; dispose() is the path that matters.
       await FvpPlatform.instance.destroyTexture(old);
-      textureId.value = null;
     }
     final size = await _videoSize.future;
     if (size == null) {
