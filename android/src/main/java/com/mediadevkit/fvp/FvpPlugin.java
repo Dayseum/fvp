@@ -104,7 +104,7 @@ public class FvpPlugin implements FlutterPlugin, MethodCallHandler {
                   @Override
                   public void onSurfaceCleanup() {
                     Log.d("FvpPlugin", "SurfaceProducer.onSurfaceCleanup for textureId " + texId);
-                    textures.remove(texId);
+                    // Keep the entry in `textures` so that DestroyRT can still release it later.
                     nativeSetSurface(handle, texId, null, 0, 0, tunnel);
                   }
                 }
@@ -112,22 +112,39 @@ public class FvpPlugin implements FlutterPlugin, MethodCallHandler {
       }
 //// FLUTTER_3.24_END
     } else if (call.method.equals("ReleaseRT")) {
+      // Detach the surface from the mdk player only. The TextureEntry (and therefore the
+      // ImageReader that owns the Surface) is released later by DestroyRT, after the dart
+      // side has destroyed the mdk player.
+      //
+      // mdk attaches the surface asynchronously on its render thread. If the ImageReader is
+      // closed here, ImageReader.close() releases the Java Surface immediately and a still
+      // pending attach on the render thread ends up in ANativeWindow_getFormat() on a
+      // destroyed android::Surface (FORTIFY: pthread_mutex_lock called on a destroyed mutex).
+      // The legacy SurfaceTexture path never released its Surface, so it was not affected.
       final int texId = call.argument("texture"); // 32bit int, 0, 1, 2 .... but SurfaceTexture.id() is long
       final long texId64 = texId; // MUST cast texId to long, otherwise remove() error
       nativeSetSurface(0, texId, null, -1, -1, false);
-      TextureEntry te = textures.get(texId64);
-      if (te == null) {
+      if (!textures.containsKey(texId64)) {
         Log.w("FvpPlugin", "onMethodCall: ReleaseRT texId not found: " + texId);
-      } else {
-        te.release();
-      }
-      if (textures.remove(texId64) == null) {
-        Log.w("FvpPlugin", "onMethodCall: ReleaseRT texture not found for " + texId);
       }
       if (surfaces.remove(texId64) == null) {
         Log.w("FvpPlugin", "onMethodCall: ReleaseRT surface not found for " + texId);
       }
       Log.i("FvpPlugin", "onMethodCall: ReleaseRT texId: " + texId + ", surfaces: " + surfaces.size() + " textures: " + textures.size());
+      result.success(null);
+    } else if (call.method.equals("DestroyRT")) {
+      // Release the TextureEntry. Called from dart after mdkPlayerAPI_delete(), i.e. after the
+      // mdk render thread has finished with the surface detached by ReleaseRT.
+      final int texId = call.argument("texture");
+      final long texId64 = texId;
+      TextureEntry te = textures.remove(texId64);
+      if (te == null) {
+        Log.w("FvpPlugin", "onMethodCall: DestroyRT texture not found for " + texId);
+      } else {
+        te.release();
+      }
+      surfaces.remove(texId64);
+      Log.i("FvpPlugin", "onMethodCall: DestroyRT texId: " + texId + ", surfaces: " + surfaces.size() + " textures: " + textures.size());
       result.success(null);
     } else if (call.method.equals("MixWithOthers")) {
       // TODO: Implement actual business.
@@ -141,7 +158,14 @@ public class FvpPlugin implements FlutterPlugin, MethodCallHandler {
   public void onDetachedFromEngine(@NonNull FlutterPluginBinding binding) {
     channel.setMethodCallHandler(null);
     Log.i("FvpPlugin", "onDetachedFromEngine: ");
-    for (long texId : textures.keySet()) { nativeSetSurface(0, texId, null, -1, -1, false);}
+    // Dart code will not run anymore, so DestroyRT is never called for the remaining textures.
+    // Release them here so that the ImageReader stops delivering frames: an in-flight
+    // onImageAvailable after the engine detached would otherwise call scheduleFrame() on a
+    // detached FlutterJNI ("Cannot execute operation because FlutterJNI is not attached to native").
+    for (Map.Entry<Long, TextureEntry> e : textures.entrySet()) {
+      nativeSetSurface(0, e.getKey(), null, -1, -1, false);
+      e.getValue().release();
+    }
     surfaces = null;
     textures = null;
   }

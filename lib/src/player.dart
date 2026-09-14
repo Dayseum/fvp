@@ -165,8 +165,13 @@ class Player {
       textureId.dispose();
       return;
     }
-    // await: ensure no player ref in fvp plugin before mdkPlayerAPI_delete() in dart
-    await updateTexture(width: -1);
+    final tex = textureId.value;
+    // await: ensure no player ref in fvp plugin before mdkPlayerAPI_delete() in dart.
+    // Detach only (not updateTexture(width: -1), which also destroys the texture entry).
+    if (tex != null && tex >= 0) {
+      await FvpPlatform.instance.releaseTexture(nativeHandle, tex);
+      textureId.value = null;
+    }
     state = PlaybackState.stopped;
     Libfvp.unregisterPort(nativeHandle);
     onEvent(null);
@@ -178,6 +183,13 @@ class Player {
     Libmdk.instance.mdkPlayerAPI_delete(_pp);
     calloc.free(_pp);
     _pp = nullptr;
+    // Release the texture (and its Surface) only after the player is destroyed. The mdk
+    // render thread may still be attaching the surface detached by releaseTexture(); the
+    // player destructor waits for it. Releasing the ImageReader earlier destroys the Surface
+    // under the render thread (android). No-op on platforms whose ReleaseRT already released it.
+    if (tex != null && tex >= 0) {
+      await FvpPlatform.instance.destroyTexture(tex);
+    }
     textureId.dispose();
   }
 
@@ -188,7 +200,11 @@ class Player {
   Future<int> updateTexture(
       {int? width, int? height, bool? tunnel, bool? fit}) async {
     if ((textureId.value ?? -1) >= 0) {
-      await FvpPlatform.instance.releaseTexture(nativeHandle, textureId.value!);
+      final old = textureId.value!;
+      await FvpPlatform.instance.releaseTexture(nativeHandle, old);
+      // The player stays alive here, so nothing waits for the render thread. Keep the previous
+      // behavior (release immediately) for texture re-creation; dispose() is the path that matters.
+      await FvpPlatform.instance.destroyTexture(old);
       textureId.value = null;
     }
     final size = await _videoSize.future;
