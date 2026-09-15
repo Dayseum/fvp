@@ -42,6 +42,11 @@ class Player {
                 detail == '1st_frame' &&
                 !_firstFrameRendered.isCompleted) {
               _firstFrameRendered.complete();
+              if (_eventCb.isEmpty) {
+                // onEvent(null) kept the native delivery alive only for this
+                // event (see onEvent). Nothing listens any more, so stop it here.
+                Libfvp.unregisterType(nativeHandle, 0);
+              }
             }
             for (final cb in _eventCb) {
               cb(ev);
@@ -726,8 +731,9 @@ class Player {
       // dispose() waits for the "render.video"/"1st_frame" event while a texture is
       // attached and no frame was rendered yet (see dispose). video_player's
       // MdkVideoPlayer.dispose() calls onEvent(null) before Player.dispose(), so keep the
-      // native event delivery alive in that case; dispose() stops it with unregisterPort
-      // after the wait. No callback in [_eventCb] runs while the list is empty.
+      // native event delivery alive in that case; the event handler stops it once the
+      // first frame arrived, and dispose() stops it with unregisterPort after the wait.
+      // No callback in [_eventCb] runs while the list is empty.
       if (_firstFrameRendered.isCompleted || (textureId.value ?? -1) < 0) {
         Libfvp.unregisterType(nativeHandle, 0);
       }
