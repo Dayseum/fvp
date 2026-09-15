@@ -178,6 +178,16 @@ class Player {
       // or a freed list node). The "render.video"/"1st_frame" event is emitted once the
       // first frame has been rendered to the surface, i.e. after the attach completed, so
       // wait for it (bounded by [surfaceAttachTimeout]) before detaching.
+      //
+      // The event keeps arriving here even if onEvent(null) was called before dispose()
+      // (see onEvent). Known limits:
+      // - A player that never renders a frame (prepared but never played, e.g. a probe that
+      //   only reads the duration) has no event to wait for, so this is a fixed wait of
+      //   [surfaceAttachTimeout] for it.
+      // - The completer is per player, not per surface. If the platform re-attached a new
+      //   surface after the first frame (Android SurfaceProducer.onSurfaceAvailable after
+      //   background/resume, or updateTexture() re-creating the texture), a pending attach
+      //   is not waited for.
       await _firstFrameRendered.future
           .timeout(surfaceAttachTimeout, onTimeout: () {});
     }
@@ -713,7 +723,14 @@ class Player {
   void onEvent(void Function(MediaEvent)? callback) {
     if (callback == null) {
       _eventCb.clear();
-      Libfvp.unregisterType(nativeHandle, 0);
+      // dispose() waits for the "render.video"/"1st_frame" event while a texture is
+      // attached and no frame was rendered yet (see dispose). video_player's
+      // MdkVideoPlayer.dispose() calls onEvent(null) before Player.dispose(), so keep the
+      // native event delivery alive in that case; dispose() stops it with unregisterPort
+      // after the wait. No callback in [_eventCb] runs while the list is empty.
+      if (_firstFrameRendered.isCompleted || (textureId.value ?? -1) < 0) {
+        Libfvp.unregisterType(nativeHandle, 0);
+      }
     } else {
       _eventCb.add(callback);
       Libfvp.registerType(nativeHandle, 0, false);
@@ -813,7 +830,8 @@ class Player {
   final _receivePort = ReceivePort();
 
   /// How long [dispose] waits for the first rendered frame before detaching the
-  /// surface when no frame has been rendered yet. See the comment in [dispose].
+  /// surface when no frame has been rendered yet. Players that never render a frame
+  /// wait for the whole duration. See the comment in [dispose].
   static Duration surfaceAttachTimeout = const Duration(seconds: 1);
   final _firstFrameRendered = Completer<void>();
 
