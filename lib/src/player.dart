@@ -177,6 +177,11 @@ class Player {
     }
     final tex = textureId.value;
     if (tex != null && tex >= 0 && !_firstFrameRendered.isCompleted) {
+      // Playback is stopped only after the wait below (stopping it would prevent the
+      // first frame from ever arriving), so silence the audio first: media whose audio
+      // starts before its first video frame would otherwise keep playing for up to
+      // [surfaceAttachTimeout] after the caller disposed the player.
+      mute = true;
       // mdk attaches the surface asynchronously on its render thread (a job queued by
       // RenderLoop::add). Detaching or destroying the player while that job is still
       // pending crashes inside libmdk (ANativeWindow_getFormat on a null/destroyed window,
